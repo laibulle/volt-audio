@@ -4,6 +4,11 @@
 
 
 ```bash
+zig build test
+```
+
+
+```bash
 zig build
 ```
 
