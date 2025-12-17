@@ -189,23 +189,45 @@ fn audioIOProc(
     const self: *CoreAudioHAL = @ptrCast(@alignCast(inClientData));
     const cb = self.callback orelse return 0;
 
+    const in_list = inInputData orelse return 0;
     const out_list = outOutputData orelse return 0;
-    // Sur macOS, l'input peut être null si aucun micro n'est activé sur le device
-    const in_list = inInputData orelse out_list;
 
-    // On récupère le buffer du canal 0
+    // Sur une carte multi-canaux interleaved, tout est dans mBuffers[0]
     const in_buf = in_list.mBuffers[0];
     const out_buf = out_list.mBuffers[0];
 
-    // Nombre d'échantillons réels par canal
-    const n_samples = out_buf.mDataByteSize / @sizeOf(f32);
+    const num_channels = in_buf.mNumberChannels; // Ici ce sera 8 pour ta Scarlett
+    const total_samples = in_buf.mDataByteSize / @sizeOf(f32);
+    const n_frames = total_samples / num_channels;
 
-    if (in_buf.mData) |in_data| {
-        const input_ptr: [*]const f32 = @ptrCast(@alignCast(in_data));
-        const output_ptr: [*]f32 = @ptrCast(@alignCast(out_buf.mData.?));
+    const in_ptr: [*]const f32 = @ptrCast(@alignCast(in_buf.mData.?));
+    const out_ptr: [*]f32 = @ptrCast(@alignCast(out_buf.mData.?));
 
-        // On passe les tranches exactes au moteur Volt
-        cb(input_ptr[0..n_samples], output_ptr[0..n_samples], n_samples);
+    // Nous devons dé-entrelacer le canal 1 pour l'envoyer au callback
+    // (On utilise un buffer temporaire pour ne pas allouer dans le thread audio)
+    var scratch_in: [1024]f32 = undefined; // Taille max de buffer
+    var scratch_out: [1024]f32 = undefined;
+
+    const safe_frames = @min(n_frames, 1024);
+
+    // 1. Extraction du canal 1 (index 0)
+    var f: u32 = 0;
+    while (f < safe_frames) : (f += 1) {
+        scratch_in[f] = in_ptr[f * num_channels];
+    }
+
+    // 2. Appel du moteur DSP (Volt) sur le canal 1 uniquement
+    cb(scratch_in[0..safe_frames], scratch_out[0..safe_frames], safe_frames);
+
+    // 3. Ré-entrelacement vers la sortie (on copie le résultat sur L et R)
+    f = 0;
+    const out_channels = out_buf.mNumberChannels;
+    while (f < safe_frames) : (f += 1) {
+        const out_base = f * out_channels;
+        out_ptr[out_base] = scratch_out[f]; // Sortie Gauche
+        if (out_channels > 1) {
+            out_ptr[out_base + 1] = scratch_out[f]; // Sortie Droite
+        }
     }
 
     return 0;
