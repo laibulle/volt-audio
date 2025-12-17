@@ -70,12 +70,13 @@ pub const CoreAudioHAL = struct {
         const length = c.CFStringGetLength(cf_name);
         const max_size = c.CFStringGetMaximumSizeForEncoding(length, c.kCFStringEncodingUTF8) + 1;
         const buffer = try self.allocator.alloc(u8, @intCast(max_size));
+        defer self.allocator.free(buffer);
 
         if (c.CFStringGetCString(cf_name, buffer.ptr, @intCast(max_size), c.kCFStringEncodingUTF8) == 0) {
             return try self.allocator.dupe(u8, "Encoding Error");
         }
 
-        return std.mem.span(@as([*:0]u8, @ptrCast(buffer.ptr)));
+        return try self.allocator.dupe(u8, std.mem.span(@as([*:0]u8, @ptrCast(buffer.ptr))));
     }
 
     fn getChannelCount(_: *CoreAudioHAL, id: c.AudioObjectID, scope: c.AudioObjectPropertyScope) u32 {

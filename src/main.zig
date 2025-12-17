@@ -14,7 +14,7 @@ pub fn main() !void {
     // --- Mode Liste ---
     if (args.len > 1 and std.mem.eql(u8, args[1], "--list")) {
         const devices = try engine.listDevices();
-        defer allocator.free(devices);
+        defer engine.deinitDevices(devices);
 
         std.debug.print("\n--- Périphériques Audio Disponibles ---\n", .{});
         for (devices, 0..) |dev, i| {
@@ -29,7 +29,7 @@ pub fn main() !void {
     if (args.len > 1 and std.mem.eql(u8, args[1], "--device")) {
         const device_idx = try std.fmt.parseInt(usize, args[2], 10);
         const devices = try engine.listDevices();
-        defer allocator.free(devices);
+        defer engine.deinitDevices(devices);
 
         if (device_idx >= devices.len) return error.InvalidDeviceIndex;
         const selected = devices[device_idx];

@@ -8,5 +8,5 @@ zig build
 ```
 
 ```bash
-./zig-out/bin/volt_audio --list
+zig build run -- --list
 ```

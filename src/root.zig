@@ -40,6 +40,13 @@ pub const VoltAudio = struct {
         return self.backend.listDevices();
     }
 
+    pub fn deinitDevices(self: *VoltAudio, devices: []DeviceInfo) void {
+        for (devices) |device| {
+            self.allocator.free(device.name);
+        }
+        self.allocator.free(devices);
+    }
+
     pub fn openDevice(self: *VoltAudio, id: u32, config: Config, callback: AudioCallback) !void {
         return self.backend.open(id, config, callback);
     }
