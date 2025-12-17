@@ -210,3 +210,29 @@ fn audioIOProc(
 
     return 0;
 }
+
+test "Audio buffer integration" {
+    const testing = std.testing;
+
+    const n_samples = 64;
+    // Utilisation de const car la slice elle-même (le pointeur + longueur) ne change pas,
+    // même si le CONTENU de la mémoire pointée va changer.
+    const mock_input = try testing.allocator.alloc(f32, n_samples);
+    const mock_output = try testing.allocator.alloc(f32, n_samples);
+    defer testing.allocator.free(mock_input);
+    defer testing.allocator.free(mock_output);
+
+    for (mock_input, 0..) |*val, i| {
+        val.* = @floatFromInt(i);
+    }
+
+    const bypass = struct {
+        fn cb(in: []const f32, out: []f32, n: u32) void {
+            @memcpy(out[0..n], in[0..n]);
+        }
+    }.cb;
+
+    bypass(mock_input, mock_output, n_samples);
+
+    try testing.expectEqualSlices(f32, mock_input, mock_output);
+}
