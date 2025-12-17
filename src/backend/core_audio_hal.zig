@@ -158,14 +158,20 @@ pub const CoreAudioHAL = struct {
         var size: u32 = @sizeOf(c.AudioStreamBasicDescription);
         var address = c.AudioObjectPropertyAddress{
             .mSelector = c.kAudioDevicePropertyStreamFormat,
-            .mScope = c.kAudioObjectPropertyScopeOutput,
+            .mScope = c.kAudioObjectPropertyScopeOutput, // On vérifie la sortie
             .mElement = c.kAudioObjectPropertyElementMain,
         };
 
-        _ = c.AudioObjectGetPropertyData(self.device_id, &address, 0, null, &size, &stream_format);
+        if (c.AudioObjectGetPropertyData(self.device_id, &address, 0, null, &size, &stream_format) != 0) return;
 
+        // Configuration pour un son naturel sans hachures :
         stream_format.mFormatID = c.kAudioFormatLinearPCM;
-        stream_format.mFormatFlags = c.kAudioFormatFlagIsFloat | c.kAudioFormatFlagIsPacked;
+        stream_format.mFormatFlags = c.kAudioFormatFlagIsFloat | c.kAudioFormatFlagIsPacked | c.kAudioFormatFlagIsNonInterleaved;
+        stream_format.mFramesPerPacket = 1;
+        stream_format.mBytesPerPacket = 4; // f32
+        stream_format.mBytesPerFrame = 4;
+        stream_format.mChannelsPerFrame = 2; // Stéréo
+        stream_format.mBitsPerChannel = 32;
 
         _ = c.AudioObjectSetPropertyData(self.device_id, &address, 0, null, size, &stream_format);
     }
@@ -183,21 +189,24 @@ fn audioIOProc(
     const self: *CoreAudioHAL = @ptrCast(@alignCast(inClientData));
     const cb = self.callback orelse return 0;
 
-    // Protection contre les buffers nulls
-    const in_list = inInputData orelse return 0;
     const out_list = outOutputData orelse return 0;
+    // Sur macOS, l'input peut être null si aucun micro n'est activé sur le device
+    const in_list = inInputData orelse out_list;
 
+    // On récupère le buffer du canal 0
     const in_buf = in_list.mBuffers[0];
     const out_buf = out_list.mBuffers[0];
 
-    const n_samples: u32 = @intCast(out_buf.mDataByteSize / @sizeOf(f32));
+    // Nombre d'échantillons réels par canal
+    const n_samples = out_buf.mDataByteSize / @sizeOf(f32);
 
-    // Utilisation de @alignCast car mData est un *anyopaque (alignement 1)
-    // alors que f32 nécessite un alignement de 4.
-    const input_ptr: [*]f32 = @ptrCast(@alignCast(in_buf.mData.?));
-    const output_ptr: [*]f32 = @ptrCast(@alignCast(out_buf.mData.?));
+    if (in_buf.mData) |in_data| {
+        const input_ptr: [*]const f32 = @ptrCast(@alignCast(in_data));
+        const output_ptr: [*]f32 = @ptrCast(@alignCast(out_buf.mData.?));
 
-    cb(input_ptr[0..n_samples], output_ptr[0..n_samples], n_samples);
+        // On passe les tranches exactes au moteur Volt
+        cb(input_ptr[0..n_samples], output_ptr[0..n_samples], n_samples);
+    }
 
     return 0;
 }

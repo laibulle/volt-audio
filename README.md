@@ -15,5 +15,5 @@ zig build run -- --list
 ```
 
 ```bash
-zig build run -- --device 2 --buffer 32
+zig build run -- --device 2 --buffer 128
 ```
