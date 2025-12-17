@@ -83,6 +83,14 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    // Configure platform-specific linker options.
+    if (target.result.os.tag == .macos) {
+        exe.linkFramework("CoreAudio");
+        exe.linkFramework("AudioToolbox");
+    } else if (target.result.os.tag == .windows) {
+        // Lien avec ton wrapper ASIO
+    }
+
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default
     // step). By default the install prefix is `zig-out/` but can be overridden
