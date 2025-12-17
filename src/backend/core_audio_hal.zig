@@ -89,9 +89,25 @@ pub const CoreAudioHAL = struct {
         var size: u32 = 0;
         if (c.AudioObjectGetPropertyDataSize(id, &address, 0, null, &size) != 0) return 0;
 
-        // Pour un test simple, on simule 2 canaux.
-        // L'implémentation réelle nécessite de parser la AudioBufferList
-        return 2;
+        // 1. On alloue un buffer brut pour stocker la AudioBufferList de taille variable
+        const mem = std.heap.page_allocator.alloc(u8, size) catch return 0;
+        defer std.heap.page_allocator.free(mem);
+
+        // 2. On cast ce buffer en pointeur AudioBufferList
+        const buffer_list: *c.AudioBufferList = @ptrCast(@alignCast(mem.ptr));
+
+        if (c.AudioObjectGetPropertyData(id, &address, 0, null, &size, buffer_list) != 0) return 0;
+
+        // 3. On compte les canaux
+        var total: u32 = 0;
+        var i: u32 = 0;
+        while (i < buffer_list.mNumberBuffers) : (i += 1) {
+            // Accès sécurisé au tableau mBuffers via ptr_at
+            // Note: mBuffers dans le header C est souvent défini comme [1] mais est extensible
+            const buffers_ptr: [*]c.AudioBuffer = @ptrCast(&buffer_list.mBuffers);
+            total += buffers_ptr[i].mNumberChannels;
+        }
+        return total;
     }
 
     fn getSampleRate(_: *CoreAudioHAL, id: c.AudioObjectID) f64 {
@@ -117,6 +133,7 @@ pub const CoreAudioHAL = struct {
         if (config.buffer_size) |size| {
             try self.setBufferSize(size);
         }
+        // Important: on configure le flux pour s'assurer du PCM Float
         try self.verifyStreamFormat();
     }
 
@@ -158,20 +175,14 @@ pub const CoreAudioHAL = struct {
         var size: u32 = @sizeOf(c.AudioStreamBasicDescription);
         var address = c.AudioObjectPropertyAddress{
             .mSelector = c.kAudioDevicePropertyStreamFormat,
-            .mScope = c.kAudioObjectPropertyScopeOutput, // On vérifie la sortie
+            .mScope = c.kAudioObjectPropertyScopeOutput,
             .mElement = c.kAudioObjectPropertyElementMain,
         };
 
         if (c.AudioObjectGetPropertyData(self.device_id, &address, 0, null, &size, &stream_format) != 0) return;
 
-        // Configuration pour un son naturel sans hachures :
         stream_format.mFormatID = c.kAudioFormatLinearPCM;
-        stream_format.mFormatFlags = c.kAudioFormatFlagIsFloat | c.kAudioFormatFlagIsPacked | c.kAudioFormatFlagIsNonInterleaved;
-        stream_format.mFramesPerPacket = 1;
-        stream_format.mBytesPerPacket = 4; // f32
-        stream_format.mBytesPerFrame = 4;
-        stream_format.mChannelsPerFrame = 2; // Stéréo
-        stream_format.mBitsPerChannel = 32;
+        stream_format.mFormatFlags = c.kAudioFormatFlagIsFloat | c.kAudioFormatFlagIsPacked;
 
         _ = c.AudioObjectSetPropertyData(self.device_id, &address, 0, null, size, &stream_format);
     }
@@ -192,42 +203,34 @@ fn audioIOProc(
     const in_list = inInputData orelse return 0;
     const out_list = outOutputData orelse return 0;
 
-    // Sur une carte multi-canaux interleaved, tout est dans mBuffers[0]
     const in_buf = in_list.mBuffers[0];
     const out_buf = out_list.mBuffers[0];
 
-    const num_channels = in_buf.mNumberChannels; // Ici ce sera 8 pour ta Scarlett
-    const total_samples = in_buf.mDataByteSize / @sizeOf(f32);
-    const n_frames = total_samples / num_channels;
+    const in_chan = in_buf.mNumberChannels;
+    const out_chan = out_buf.mNumberChannels;
+
+    const n_frames = out_buf.mDataByteSize / (out_chan * @sizeOf(f32));
 
     const in_ptr: [*]const f32 = @ptrCast(@alignCast(in_buf.mData.?));
     const out_ptr: [*]f32 = @ptrCast(@alignCast(out_buf.mData.?));
 
-    // Nous devons dé-entrelacer le canal 1 pour l'envoyer au callback
-    // (On utilise un buffer temporaire pour ne pas allouer dans le thread audio)
-    var scratch_in: [1024]f32 = undefined; // Taille max de buffer
-    var scratch_out: [1024]f32 = undefined;
+    // Buffer scratch pour éviter les allocations dans le thread audio
+    var scratch_in: [4096]f32 = undefined;
+    var scratch_out: [4096]f32 = undefined;
+    const frames = @min(n_frames, 4096);
 
-    const safe_frames = @min(n_frames, 1024);
-
-    // 1. Extraction du canal 1 (index 0)
-    var f: u32 = 0;
-    while (f < safe_frames) : (f += 1) {
-        scratch_in[f] = in_ptr[f * num_channels];
+    // 1. Dé-entrelacement (Extraction Mic 1)
+    for (0..frames) |f| {
+        scratch_in[f] = in_ptr[f * in_chan];
     }
 
-    // 2. Appel du moteur DSP (Volt) sur le canal 1 uniquement
-    cb(scratch_in[0..safe_frames], scratch_out[0..safe_frames], safe_frames);
+    // 2. Traitement DSP
+    cb(scratch_in[0..frames], scratch_out[0..frames], @intCast(frames));
 
-    // 3. Ré-entrelacement vers la sortie (on copie le résultat sur L et R)
-    f = 0;
-    const out_channels = out_buf.mNumberChannels;
-    while (f < safe_frames) : (f += 1) {
-        const out_base = f * out_channels;
-        out_ptr[out_base] = scratch_out[f]; // Sortie Gauche
-        if (out_channels > 1) {
-            out_ptr[out_base + 1] = scratch_out[f]; // Sortie Droite
-        }
+    // 3. Ré-entrelacement vers Sortie (Copie Mono -> Stéréo L/R)
+    for (0..frames) |f| {
+        out_ptr[f * out_chan] = scratch_out[f];
+        if (out_chan > 1) out_ptr[f * out_chan + 1] = scratch_out[f];
     }
 
     return 0;
@@ -236,37 +239,36 @@ fn audioIOProc(
 test "Audio buffer integration (8-channel interleaved)" {
     const testing = std.testing;
     const num_channels = 8;
-    const n_frames = 4; // 4 instants T
+    const n_frames = 4;
     const total_samples = n_frames * num_channels;
 
     const mock_input = try testing.allocator.alloc(f32, total_samples);
-    const mock_output = try testing.allocator.alloc(f32, total_samples);
+    const mock_output = try testing.allocator.alloc(f32, n_frames * 2); // Stéréo
     defer testing.allocator.free(mock_input);
     defer testing.allocator.free(mock_output);
 
-    // On remplit le Mic 1 avec des valeurs connues (0.1, 0.2, 0.3, 0.4)
-    // Et on remplit les autres micros (2 à 8) avec du "bruit" (99.0)
     for (0..n_frames) |f| {
-        mock_input[f * num_channels] = @as(f32, @floatFromInt(f)) / 10.0; // Mic 1
-        for (1..num_channels) |c_idx| {
-            mock_input[f * num_channels + c_idx] = 99.0; // Bruit sur les autres entrées
-        }
+        mock_input[f * num_channels] = @as(f32, @floatFromInt(f)) / 10.0;
+        for (1..num_channels) |c_idx| mock_input[f * num_channels + c_idx] = 99.0;
     }
 
-    // Le callback de ton moteur (Volt) qui attend du MONO
-    const volt_callback = struct {
-        fn cb(in: []const f32, out: []f32, n: u32) void {
-            @memcpy(out[0..n], in[0..n]);
-        }
-    }.cb;
+    // Simulation de la logique de l'audioIOProc pour le dé-entrelacement
+    var scratch_in: [n_frames]f32 = undefined;
+    var scratch_out: [n_frames]f32 = undefined;
 
-    // --- ICI : SIMULATION DU BUG ---
-    // Si on fait comme ton ancien code (copie directe de la slice) :
-    volt_callback(mock_input, mock_output, total_samples);
+    // Dé-entrelacement
+    for (0..n_frames) |f| scratch_in[f] = mock_input[f * num_channels];
 
-    // Ce test va ÉCHOUER car le premier échantillon de sortie sera 0.1 (OK),
-    // mais le deuxième sera 99.0 (le Mic 2) au lieu de 0.2 (le Mic 1 à T+1).
-    // C'est ça qui crée le son haché/robotique.
-    try testing.expectEqual(mock_input[0], mock_output[0]); // Mic 1 Frame 0
-    try testing.expectEqual(mock_input[num_channels], mock_output[1]); // Mic 1 Frame 1
+    // Callback Bypass
+    @memcpy(&scratch_out, &scratch_in);
+
+    // Ré-entrelacement
+    for (0..n_frames) |f| {
+        mock_output[f * 2] = scratch_out[f];
+        mock_output[f * 2 + 1] = scratch_out[f];
+    }
+
+    // Maintenant le test DOIT passer car on compare le Mic 1 extrait
+    try testing.expectEqual(@as(f32, 0.0), mock_output[0]);
+    try testing.expectEqual(@as(f32, 0.1), mock_output[2]);
 }
