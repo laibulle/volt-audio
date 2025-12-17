@@ -6,13 +6,13 @@ const volt = @import("../root.zig");
 const DeviceInfo = volt.DeviceInfo;
 const Config = volt.Config;
 
-pub const MacOSHAL = struct {
+pub const CoreAudioHAL = struct {
     device_id: c.AudioObjectID,
     is_running: bool = false,
     proc_id: c.AudioDeviceIOProcID = null,
     callback: *const fn (input: []const f32, output: []f32, n_samples: u32) void,
 
-    pub fn init(callback: anytype) !MacOSHAL {
+    pub fn init(callback: anytype) !CoreAudioHAL {
         var device_id: c.AudioObjectID = 0;
         var address = c.AudioObjectPropertyAddress{
             .mSelector = c.kAudioHardwarePropertyDefaultOutputDevice,
@@ -38,7 +38,7 @@ pub const MacOSHAL = struct {
         };
     }
 
-    pub fn start(self: *MacOSHAL) !void {
+    pub fn start(self: *CoreAudioHAL) !void {
         const status = c.AudioDeviceCreateIOProcID(
             self.device_id,
             audioIOProc,
@@ -51,7 +51,7 @@ pub const MacOSHAL = struct {
         self.is_running = true;
     }
 
-    pub fn listDevices(self: *MacOSHAL) ![]DeviceInfo {
+    pub fn listDevices(self: *CoreAudioHAL) ![]DeviceInfo {
         var address = c.AudioObjectPropertyAddress{
             .mSelector = c.kAudioHardwarePropertyDevices,
             .mScope = c.kAudioObjectPropertyScopeGlobal,
@@ -74,7 +74,7 @@ pub const MacOSHAL = struct {
         return devices;
     }
 
-    fn getDeviceInfo(self: *MacOSHAL, id: c.AudioObjectID) !DeviceInfo {
+    fn getDeviceInfo(self: *CoreAudioHAL, id: c.AudioObjectID) !DeviceInfo {
         // var _name: [256]u8 = undefined;
         // var _size: u32 = 256;
         // var _address = c.AudioObjectPropertyAddress{
@@ -96,7 +96,7 @@ pub const MacOSHAL = struct {
         };
     }
 
-    pub fn open(self: *MacOSHAL, device_id: c.AudioObjectID, config: Config) !void {
+    pub fn open(self: *CoreAudioHAL, device_id: c.AudioObjectID, config: Config) !void {
         self.device_id = device_id;
 
         // 1. Appliquer le Sample Rate si spécifié
@@ -128,7 +128,7 @@ fn audioIOProc(
     _ = inInputTime;
     _ = inOutputTime;
 
-    const self: *MacOSHAL = @ptrCast(@alignCast(inClientData));
+    const self: *CoreAudioHAL = @ptrCast(@alignCast(inClientData));
 
     // 1. Extraire les buffers (simplifié pour 1 canal ici)
     const in_buffer = inInputData.?.mBuffers[0];
