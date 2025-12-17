@@ -85,8 +85,10 @@ pub fn build(b: *std.Build) void {
 
     // Configure platform-specific linker options.
     if (target.result.os.tag == .macos) {
-        exe.linkFramework("CoreAudio");
         exe.linkFramework("AudioToolbox");
+        exe.linkFramework("CoreAudio");
+        exe.linkFramework("CoreFoundation"); // Nécessaire pour CFStringRef
+        exe.linkLibC(); // Indispensable quand on utilise @cImport
     } else if (target.result.os.tag == .windows) {
         // Lien avec ton wrapper ASIO
     }

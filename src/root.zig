@@ -1,23 +1,50 @@
-//! By convention, root.zig is the root source file when making a library.
 const std = @import("std");
+const builtin = @import("builtin");
 
-pub fn bufferedPrint() !void {
-    // Stdout is for the actual output of your application, for example if you
-    // are implementing gzip, then only the compressed bytes should be sent to
-    // stdout, not any debugging messages.
-    var stdout_buffer: [1024]u8 = undefined;
-    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
-    const stdout = &stdout_writer.interface;
+// --- Types Publics ---
 
-    try stdout.print("Run `zig build test` to run the tests.\n", .{});
+pub const DeviceInfo = struct {
+    id: u32,
+    name: []const u8,
+    max_input_channels: u32,
+    max_output_channels: u32,
+    default_sample_rate: f64,
+};
 
-    try stdout.flush(); // Don't forget to flush!
-}
+pub const Config = struct {
+    sample_rate: ?f64 = null,
+    buffer_size: ?u32 = null,
+    input_channels: u32 = 2,
+    output_channels: u32 = 2,
+    exclusive_mode: bool = true,
+};
 
-pub fn add(a: i32, b: i32) i32 {
-    return a + b;
-}
+pub const AudioCallback = *const fn (input: []const f32, output: []f32, n_samples: u32) void;
 
-test "basic add functionality" {
-    try std.testing.expect(add(3, 7) == 10);
-}
+// --- Dispatch du Backend ---
+
+pub const VoltAudio = struct {
+    const Backend = @import("backend/core_audio_hal.zig");
+
+    backend: Backend,
+    allocator: std.mem.Allocator,
+
+    pub fn init(allocator: std.mem.Allocator) !VoltAudio {
+        return .{
+            .allocator = allocator,
+            .backend = try Backend.init(allocator),
+        };
+    }
+
+    pub fn listDevices(self: *VoltAudio) ![]DeviceInfo {
+        return self.backend.listDevices();
+    }
+
+    pub fn openDevice(self: *VoltAudio, id: u32, config: Config, callback: AudioCallback) !void {
+        return self.backend.open(id, config, callback);
+    }
+
+    pub fn start(self: *VoltAudio) !void {
+        return self.backend.start();
+    }
+};

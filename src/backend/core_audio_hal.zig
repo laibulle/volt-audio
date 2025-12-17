@@ -2,7 +2,7 @@ const std = @import("std");
 const c = @cImport({
     @cInclude("CoreAudio/CoreAudio.h");
 });
-const volt = @import("../lib.zig");
+const volt = @import("../root.zig");
 const DeviceInfo = volt.DeviceInfo;
 const Config = volt.Config;
 
@@ -165,3 +165,15 @@ pub fn setBufferSize(device_id: c.AudioObjectID, size: u32) !void {
 
     if (status != 0) return error.CannotSetBufferSize;
 }
+
+// fn cfStringToZig(allocator: std.mem.Allocator, cf_str: c.CFStringRef) ![]const u8 {
+//     const length = c.CFStringGetLength(cf_str);
+//     const max_size = c.CFStringGetMaximumSizeForEncoding(length, c.kCFStringEncodingUTF8) + 1;
+//     const buffer = try allocator.alloc(u8, @intCast(max_size));
+
+//     if (c.CFStringGetCString(cf_str, buffer.ptr, @intCast(max_size), c.kCFStringEncodingUTF8) == 0) {
+//         return error.ConversionFailed;
+//     }
+
+//     return std.mem.span(@ptrCast([*:0]u8, buffer.ptr));
+// }
