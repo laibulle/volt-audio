@@ -51,7 +51,7 @@ pub fn main() !void {
         try engine.start();
 
         std.debug.print("En lecture... Appuyez sur Ctrl+C pour arrêter.\n", .{});
-        while (true) std.time.sleep(std.time.ns_per_s);
+        while (true) {}
     }
 
     std.debug.print("Usage: volt-run --list  OU  volt-run --device <idx> --buffer <size>\n", .{});
