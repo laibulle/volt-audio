@@ -45,12 +45,12 @@ pub fn main() !void {
             .buffer_size = buffer_size,
         };
 
-        std.debug.print("Démarrage sur {s} avec un buffer de {d} samples...\n", .{ selected.name, buffer_size });
+        std.debug.print("Starting audio onur {s} with a buffer of {d} samples...\n", .{ selected.name, buffer_size });
 
         try engine.openDevice(selected.id, config, audioCallback);
         try engine.start();
 
-        std.debug.print("En lecture... Appuyez sur Ctrl+C pour arrêter.\n", .{});
+        std.debug.print("Playing audio...type CTRL+C to stop\n", .{});
         while (true) {}
     }
 
