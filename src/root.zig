@@ -24,7 +24,7 @@ pub const AudioCallback = *const fn (input: []const f32, output: []f32, n_sample
 // --- Dispatch du Backend ---
 
 pub const VoltAudio = struct {
-    const Backend = @import("backend/core_audio_hal.zig");
+    const Backend = @import("backend/core_audio_hal.zig").CoreAudioHAL;
 
     backend: Backend,
     allocator: std.mem.Allocator,
