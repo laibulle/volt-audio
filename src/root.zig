@@ -55,3 +55,13 @@ pub const VoltAudio = struct {
         return self.backend.start();
     }
 };
+
+test "VoltAudio init et deinit" {
+    const allocator = std.testing.allocator; // Allocateur spécial qui détecte les fuites
+
+    const engine = try VoltAudio.init(allocator);
+    // On peut imaginer une méthode deinit plus tard
+    // defer engine.deinit();
+
+    try std.testing.expect(@TypeOf(engine) == VoltAudio);
+}
