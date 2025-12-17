@@ -233,28 +233,40 @@ fn audioIOProc(
     return 0;
 }
 
-test "Audio buffer integration" {
+test "Audio buffer integration (8-channel interleaved)" {
     const testing = std.testing;
+    const num_channels = 8;
+    const n_frames = 4; // 4 instants T
+    const total_samples = n_frames * num_channels;
 
-    const n_samples = 64;
-    // Utilisation de const car la slice elle-même (le pointeur + longueur) ne change pas,
-    // même si le CONTENU de la mémoire pointée va changer.
-    const mock_input = try testing.allocator.alloc(f32, n_samples);
-    const mock_output = try testing.allocator.alloc(f32, n_samples);
+    const mock_input = try testing.allocator.alloc(f32, total_samples);
+    const mock_output = try testing.allocator.alloc(f32, total_samples);
     defer testing.allocator.free(mock_input);
     defer testing.allocator.free(mock_output);
 
-    for (mock_input, 0..) |*val, i| {
-        val.* = @floatFromInt(i);
+    // On remplit le Mic 1 avec des valeurs connues (0.1, 0.2, 0.3, 0.4)
+    // Et on remplit les autres micros (2 à 8) avec du "bruit" (99.0)
+    for (0..n_frames) |f| {
+        mock_input[f * num_channels] = @as(f32, @floatFromInt(f)) / 10.0; // Mic 1
+        for (1..num_channels) |c_idx| {
+            mock_input[f * num_channels + c_idx] = 99.0; // Bruit sur les autres entrées
+        }
     }
 
-    const bypass = struct {
+    // Le callback de ton moteur (Volt) qui attend du MONO
+    const volt_callback = struct {
         fn cb(in: []const f32, out: []f32, n: u32) void {
             @memcpy(out[0..n], in[0..n]);
         }
     }.cb;
 
-    bypass(mock_input, mock_output, n_samples);
+    // --- ICI : SIMULATION DU BUG ---
+    // Si on fait comme ton ancien code (copie directe de la slice) :
+    volt_callback(mock_input, mock_output, total_samples);
 
-    try testing.expectEqualSlices(f32, mock_input, mock_output);
+    // Ce test va ÉCHOUER car le premier échantillon de sortie sera 0.1 (OK),
+    // mais le deuxième sera 99.0 (le Mic 2) au lieu de 0.2 (le Mic 1 à T+1).
+    // C'est ça qui crée le son haché/robotique.
+    try testing.expectEqual(mock_input[0], mock_output[0]); // Mic 1 Frame 0
+    try testing.expectEqual(mock_input[num_channels], mock_output[1]); // Mic 1 Frame 1
 }

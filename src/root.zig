@@ -3,6 +3,24 @@ const builtin = @import("builtin");
 
 // --- Types Publics ---
 
+const AudioBus = struct {
+    data: [*]f32,
+    num_channels: u32,
+    num_frames: u32,
+    is_interleaved: bool,
+
+    // Helper pour récupérer un échantillon précis sans se soucier du format
+    pub fn getSample(self: AudioBus, channel: u32, frame: u32) f32 {
+        if (self.is_interleaved) {
+            return self.data[frame * self.num_channels + channel];
+        } else {
+            // En non-interleaved, les canaux sont souvent dans des buffers séparés
+            // (Il faudrait adapter la struct pour porter plusieurs pointeurs)
+            return self.data[frame];
+        }
+    }
+};
+
 pub const DeviceInfo = struct {
     id: u32,
     name: []const u8,
