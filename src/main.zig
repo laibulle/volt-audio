@@ -58,7 +58,23 @@ pub fn main() !void {
 }
 
 // Le callback de test (Direct monitoring)
-fn audioCallback(input: []const f32, output: []f32, n_samples: u32) void {
-    // On copie l'entrée vers la sortie pour tester la latence "à vide"
-    @memcpy(output[0..n_samples], input[0..n_samples]);
+fn audioCallback(input: volt.AudioBuffer, output: volt.AudioBuffer) void {
+
+    // 1. On récupère le canal 0 (Mic 1 de ta Scarlett)
+    // getChannel(0) retourne une slice []f32 déjà dé-entrelacée
+    const in_mic1 = input.getChannel(0);
+
+    // 2. On récupère les canaux de sortie (Stéréo L et R)
+    const out_L = output.getChannel(0);
+    const out_R = output.getChannel(1);
+
+    // 3. Traitement (Bypass Mono vers Stéréo)
+    // On utilise frameCount pour savoir combien de samples traiter
+    for (0..input.frameCount) |i| {
+        const sample = in_mic1[i];
+
+        // On copie le micro 1 sur les deux sorties
+        out_L[i] = sample;
+        out_R[i] = sample;
+    }
 }

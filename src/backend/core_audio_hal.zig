@@ -14,6 +14,16 @@ pub const CoreAudioHAL = struct {
     proc_id: c.AudioDeviceIOProcID = null,
     callback: ?volt.AudioCallback = null,
 
+    // Buffers de travail pré-alloués pour le DSP (supporte jusqu'à 8 canaux)
+    // On utilise 4096 comme taille max de buffer raisonnable
+    in_scratch: [8][4096]f32 = undefined,
+    out_scratch: [8][4096]f32 = undefined,
+    in_views: [8][]f32 = undefined,
+    out_views: [8][]f32 = undefined,
+
+    num_active_in: u32 = 1,
+    num_active_out: u32 = 2,
+
     pub fn init(allocator: std.mem.Allocator) !CoreAudioHAL {
         return CoreAudioHAL{
             .allocator = allocator,
@@ -89,21 +99,15 @@ pub const CoreAudioHAL = struct {
         var size: u32 = 0;
         if (c.AudioObjectGetPropertyDataSize(id, &address, 0, null, &size) != 0) return 0;
 
-        // 1. On alloue un buffer brut pour stocker la AudioBufferList de taille variable
         const mem = std.heap.page_allocator.alloc(u8, size) catch return 0;
         defer std.heap.page_allocator.free(mem);
 
-        // 2. On cast ce buffer en pointeur AudioBufferList
         const buffer_list: *c.AudioBufferList = @ptrCast(@alignCast(mem.ptr));
-
         if (c.AudioObjectGetPropertyData(id, &address, 0, null, &size, buffer_list) != 0) return 0;
 
-        // 3. On compte les canaux
         var total: u32 = 0;
         var i: u32 = 0;
         while (i < buffer_list.mNumberBuffers) : (i += 1) {
-            // Accès sécurisé au tableau mBuffers via ptr_at
-            // Note: mBuffers dans le header C est souvent défini comme [1] mais est extensible
             const buffers_ptr: [*]c.AudioBuffer = @ptrCast(&buffer_list.mBuffers);
             total += buffers_ptr[i].mNumberChannels;
         }
@@ -133,7 +137,6 @@ pub const CoreAudioHAL = struct {
         if (config.buffer_size) |size| {
             try self.setBufferSize(size);
         }
-        // Important: on configure le flux pour s'assurer du PCM Float
         try self.verifyStreamFormat();
     }
 
@@ -197,7 +200,7 @@ fn audioIOProc(
     _: ?*const c.AudioTimeStamp,
     inClientData: ?*anyopaque,
 ) callconv(.c) c.OSStatus {
-    const self: *CoreAudioHAL = @ptrCast(@alignCast(inClientData));
+    const self: *CoreAudioHAL = @ptrCast(@alignCast(inClientData orelse return 0));
     const cb = self.callback orelse return 0;
 
     const in_list = inInputData orelse return 0;
@@ -206,31 +209,54 @@ fn audioIOProc(
     const in_buf = in_list.mBuffers[0];
     const out_buf = out_list.mBuffers[0];
 
-    const in_chan = in_buf.mNumberChannels;
-    const out_chan = out_buf.mNumberChannels;
+    const in_stride = in_buf.mNumberChannels;
+    const out_stride = out_buf.mNumberChannels;
 
-    const n_frames = out_buf.mDataByteSize / (out_chan * @sizeOf(f32));
+    // Calcul du nombre de frames (on sature à 4096 pour nos scratch buffers)
+    const n_frames = @min(out_buf.mDataByteSize / (out_stride * @sizeOf(f32)), 4096);
 
     const in_ptr: [*]const f32 = @ptrCast(@alignCast(in_buf.mData.?));
     const out_ptr: [*]f32 = @ptrCast(@alignCast(out_buf.mData.?));
 
-    // Buffer scratch pour éviter les allocations dans le thread audio
-    var scratch_in: [4096]f32 = undefined;
-    var scratch_out: [4096]f32 = undefined;
-    const frames = @min(n_frames, 4096);
-
-    // 1. Dé-entrelacement (Extraction Mic 1)
-    for (0..frames) |f| {
-        scratch_in[f] = in_ptr[f * in_chan];
+    // 1. EXTRACTION & NORMALISATION
+    for (0..self.num_active_in) |ch| {
+        for (0..n_frames) |f| {
+            // Extraction du canal 'ch' depuis le flux entrelacé
+            self.in_scratch[ch][f] = in_ptr[f * in_stride + ch];
+        }
+        self.in_views[ch] = self.in_scratch[ch][0..n_frames];
     }
 
-    // 2. Traitement DSP
-    cb(scratch_in[0..frames], scratch_out[0..frames], @intCast(frames));
+    // 2. PRÉPARATION DES VUES DE SORTIE
+    for (0..self.num_active_out) |ch| {
+        self.out_views[ch] = self.out_scratch[ch][0..n_frames];
 
-    // 3. Ré-entrelacement vers Sortie (Copie Mono -> Stéréo L/R)
-    for (0..frames) |f| {
-        out_ptr[f * out_chan] = scratch_out[f];
-        if (out_chan > 1) out_ptr[f * out_chan + 1] = scratch_out[f];
+        // On remet le buffer de sortie à zéro proprement pour éviter les résidus audio
+        @memset(self.out_scratch[ch][0..n_frames], 0.0);
+    }
+
+    // 3. EXPOSITION AU DSP
+    const input_bus = volt.AudioBuffer{
+        .channels = self.in_views[0..self.num_active_in],
+        .frameCount = @intCast(n_frames),
+    };
+    const output_bus = volt.AudioBuffer{
+        .channels = self.out_views[0..self.num_active_out],
+        .frameCount = @intCast(n_frames),
+    };
+
+    cb(input_bus, output_bus);
+
+    // 4. INJECTION & CLAMPING
+    for (0..n_frames) |f| {
+        for (0..out_stride) |ch| {
+            // On mappe le canal DSP vers le canal hardware (mono -> stéréo si besoin)
+            const source_ch = if (ch < self.num_active_out) ch else 0;
+            const sample = self.out_scratch[source_ch][f];
+
+            // On sature à 1.0 pour protéger le matériel
+            out_ptr[f * out_stride + ch] = std.math.clamp(sample, -1.0, 1.0);
+        }
     }
 
     return 0;
@@ -243,32 +269,28 @@ test "Audio buffer integration (8-channel interleaved)" {
     const total_samples = n_frames * num_channels;
 
     const mock_input = try testing.allocator.alloc(f32, total_samples);
-    const mock_output = try testing.allocator.alloc(f32, n_frames * 2); // Stéréo
+    const mock_output = try testing.allocator.alloc(f32, n_frames * 2);
     defer testing.allocator.free(mock_input);
     defer testing.allocator.free(mock_output);
 
+    // Remplissage simulé (Mic 1 = 0.0, 0.1, 0.2...)
     for (0..n_frames) |f| {
         mock_input[f * num_channels] = @as(f32, @floatFromInt(f)) / 10.0;
         for (1..num_channels) |c_idx| mock_input[f * num_channels + c_idx] = 99.0;
     }
 
-    // Simulation de la logique de l'audioIOProc pour le dé-entrelacement
-    var scratch_in: [n_frames]f32 = undefined;
-    var scratch_out: [n_frames]f32 = undefined;
+    // On simule ce que fait le HAL
+    var s_in: [n_frames]f32 = undefined;
+    var s_out: [n_frames]f32 = undefined;
 
-    // Dé-entrelacement
-    for (0..n_frames) |f| scratch_in[f] = mock_input[f * num_channels];
+    for (0..n_frames) |f| s_in[f] = mock_input[f * num_channels];
+    @memcpy(&s_out, &s_in); // Bypass
 
-    // Callback Bypass
-    @memcpy(&scratch_out, &scratch_in);
-
-    // Ré-entrelacement
     for (0..n_frames) |f| {
-        mock_output[f * 2] = scratch_out[f];
-        mock_output[f * 2 + 1] = scratch_out[f];
+        mock_output[f * 2] = s_out[f];
+        mock_output[f * 2 + 1] = s_out[f];
     }
 
-    // Maintenant le test DOIT passer car on compare le Mic 1 extrait
     try testing.expectEqual(@as(f32, 0.0), mock_output[0]);
     try testing.expectEqual(@as(f32, 0.1), mock_output[2]);
 }

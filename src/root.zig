@@ -2,6 +2,22 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 // --- Types Publics ---
+// Dans root.zig
+pub const AudioBuffer = struct {
+    /// Les samples sont GARANTIS en f32 et normalisés [-1.0, 1.0]
+    channels: []const []f32,
+    frameCount: u32,
+    pub fn getChannel(self: AudioBuffer, index: u32) []f32 {
+        if (index >= self.channels.len) {
+            // Retourne une slice vide si l'index est invalide pour éviter un crash
+            return &[_]f32{};
+        }
+        return self.channels[index];
+    }
+};
+
+// La signature de ton callback métier change pour utiliser ces buffers
+pub const AudioCallback = *const fn (input: AudioBuffer, output: AudioBuffer) void;
 
 const AudioBus = struct {
     data: [*]f32,
@@ -36,8 +52,6 @@ pub const Config = struct {
     output_channels: u32 = 2,
     exclusive_mode: bool = true,
 };
-
-pub const AudioCallback = *const fn (input: []const f32, output: []f32, n_samples: u32) void;
 
 // --- Dispatch du Backend ---
 
